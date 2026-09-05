@@ -5856,6 +5856,71 @@ document.addEventListener(
 
 </script>
 
+<!-- Firebase 연결 -->
+<script type="module">
 
+import { initializeApp }
+from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+
+import {
+    getFirestore,
+    doc,
+    getDoc,
+    setDoc,
+    collection,
+    getDocs,
+    addDoc,
+    updateDoc,
+    deleteDoc
+}
+from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+
+
+const firebaseConfig = {
+    apiKey: "AIzaSyDipw0bC4PMfj0SiuOhfEj35a6ur6mEGx0",
+    authDomain: "nbnb-record.firebaseapp.com",
+    projectId: "nbnb-record",
+    storageBucket: "nbnb-record.firebasestorage.app",
+    messagingSenderId: "302885636285",
+    appId: "1:302885636285:web:b1790d755668501ecf8fd4"
+};
+
+
+/* Firebase 시작 */
+
+const app = initializeApp(firebaseConfig);
+
+const db = getFirestore(app);
+
+
+/* =================================
+   기존 일반 JavaScript에서도
+   Firebase를 사용할 수 있도록 연결
+================================= */
+
+window.firebaseDB = db;
+
+window.firebaseFirestore = {
+
+    doc,
+    getDoc,
+    setDoc,
+
+    collection,
+    getDocs,
+    addDoc,
+
+    updateDoc,
+    deleteDoc
+
+};
+
+
+console.log(
+    "🔥 Firebase Firestore 연결 완료"
+);
+
+</script>
+   
 </body>
 </html>
