@@ -5552,13 +5552,14 @@ function saveTeamData() {
 
     const data = [];
 
-
     cells.forEach(function(cell) {
 
         data.push(cell.innerText);
 
     });
 
+
+    /* 기존 기기에도 백업 */
 
     localStorage.setItem(
 
@@ -5568,8 +5569,83 @@ function saveTeamData() {
 
     );
 
-}
 
+    /* Firebase 연결 확인 */
+
+    if (
+
+        !window.firebaseDB ||
+
+        !window.firebaseFirestore
+
+    ) {
+
+        console.log("Firebase 연결 대기 중...");
+
+        return;
+
+    }
+
+
+    const {
+
+        doc,
+
+        setDoc
+
+    } = window.firebaseFirestore;
+
+
+    const db = window.firebaseDB;
+
+
+    /* Firestore 공용 저장 */
+
+    setDoc(
+
+        doc(
+
+            db,
+
+            "teamData",
+
+            "current"
+
+        ),
+
+        {
+
+            data: data,
+
+            updatedAt: new Date().toISOString()
+
+        }
+
+    )
+
+    .then(function() {
+
+        console.log(
+
+            "🔥 팀 데이터 Firebase 저장 완료"
+
+        );
+
+    })
+
+    .catch(function(error) {
+
+        console.error(
+
+            "Firebase 팀 데이터 저장 오류:",
+
+            error
+
+        );
+
+    });
+
+}
 
 
 /* =================================
@@ -5578,7 +5654,168 @@ function saveTeamData() {
 
 function loadTeamData() {
 
-    const savedData = localStorage.getItem("nbnbTeamData");
+    const cells = document.querySelectorAll(
+
+        ".editable"
+
+    );
+
+
+    /* Firebase 연결되어 있으면
+       Firebase 데이터부터 불러오기 */
+
+    if (
+
+        window.firebaseDB &&
+
+        window.firebaseFirestore
+
+    ) {
+
+        const {
+
+            doc,
+
+            getDoc
+
+        } = window.firebaseFirestore;
+
+
+        const db = window.firebaseDB;
+
+
+        getDoc(
+
+            doc(
+
+                db,
+
+                "teamData",
+
+                "current"
+
+            )
+
+        )
+
+        .then(function(snapshot) {
+
+
+            /* Firebase 데이터가 있으면 */
+
+            if (
+
+                snapshot.exists()
+
+            ) {
+
+                const firebaseData =
+
+                    snapshot.data().data;
+
+
+                if (
+
+                    Array.isArray(firebaseData)
+
+                ) {
+
+                    cells.forEach(
+
+                        function(cell, index) {
+
+                            if (
+
+                                firebaseData[index]
+
+                                !== undefined
+
+                            ) {
+
+                                cell.innerText =
+
+                                    firebaseData[index];
+
+                            }
+
+                        }
+
+                    );
+
+
+                    /* 현재 기기에도 백업 */
+
+                    localStorage.setItem(
+
+                        "nbnbTeamData",
+
+                        JSON.stringify(
+
+                            firebaseData
+
+                        )
+
+                    );
+
+
+                    console.log(
+
+                        "🔥 Firebase 팀 데이터 불러오기 완료"
+
+                    );
+
+                    return;
+
+                }
+
+            }
+
+
+            /* Firebase에 데이터가 없으면
+               기존 기기 데이터 사용 */
+
+            loadTeamDataFromLocalStorage();
+
+
+        })
+
+        .catch(function(error) {
+
+
+            console.error(
+
+                "Firebase 팀 데이터 불러오기 오류:",
+
+                error
+
+            );
+
+
+            loadTeamDataFromLocalStorage();
+
+        });
+
+
+        return;
+
+    }
+
+
+    /* Firebase 연결 전 */
+
+    loadTeamDataFromLocalStorage();
+
+}
+
+function loadTeamDataFromLocalStorage() {
+
+    const savedData =
+
+        localStorage.getItem(
+
+            "nbnbTeamData"
+
+        );
 
 
     if (!savedData) {
@@ -5588,24 +5825,63 @@ function loadTeamData() {
     }
 
 
-    const data = JSON.parse(savedData);
+    try {
 
-    const cells = document.querySelectorAll(".editable");
+        const data =
+
+            JSON.parse(
+
+                savedData
+
+            );
 
 
-    cells.forEach(function(cell, index) {
+        const cells =
 
-        if (data[index] !== undefined) {
+            document.querySelectorAll(
 
-            cell.innerText = data[index];
+                ".editable"
 
-        }
+            );
 
-    });
+
+        cells.forEach(
+
+            function(cell, index) {
+
+                if (
+
+                    data[index]
+
+                    !== undefined
+
+                ) {
+
+                    cell.innerText =
+
+                        data[index];
+
+                }
+
+            }
+
+        );
+
+    }
+
+    catch(error) {
+
+        console.error(
+
+            "팀 데이터 불러오기 오류:",
+
+            error
+
+        );
+
+    }
 
 }
-
-
 
 /* =================================
    직접 입력 시 자동 저장
@@ -5915,6 +6191,11 @@ window.firebaseFirestore = {
 
 };
 
+window.firebaseReady = true;
+
+window.dispatchEvent(
+    new Event("firebaseReady")
+);
 
 console.log(
     "🔥 Firebase Firestore 연결 완료"
