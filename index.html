@@ -6001,9 +6001,6 @@ function updateTeamCounts() {
     }
 }
 
-let teamDataUnsubscribe = null;
-
-
 /* =================================
    팀 데이터 변경 / 실시간 동기화
 ================================= */
@@ -6274,17 +6271,13 @@ function loadTeamData() {
 
 
                 /*
-                   현재 이 기기에서
-                   수정 중인 데이터가 있으면
-                   원격 데이터로 덮어쓰지 않음
+                   이 기기에서 아직 저장하지 않은 직접 수정이 있으면
+                   현재 입력 내용을 보호한다.
+                   수정하지 않은 기기는 원격 변경을 즉시 반영한다.
                 */
 
-                if (
-                    isTeamDataChanged
-                ) {
-
+                if (isTeamDataChanged) {
                     return;
-
                 }
 
 
@@ -6483,7 +6476,10 @@ document.addEventListener(
             )
         ) {
 
-            checkTeamDataChanged();
+            /* 사용자가 직접 수정한 경우에만 저장 대상으로 표시 */
+            if (!isApplyingRemoteTeamData) {
+                isTeamDataChanged = true;
+            }
 
         }
 
@@ -6568,9 +6564,9 @@ document.addEventListener("paste", function(event) {
     });
 
 
-    /* 붙여넣기 후 자동 저장 */
+    /* 붙여넣기는 사용자의 직접 수정이므로 저장 대상으로 표시 */
 
-    saveTeamData();
+    isTeamDataChanged = true;
 
 
 });
