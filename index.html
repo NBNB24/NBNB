@@ -481,6 +481,28 @@ body {
 }
 
 
+/* 엑셀식 다중 셀 선택 */
+.editable.cell-selected {
+    background: #cfe8ff !important;
+    outline: 2px solid #4a90e2;
+    outline-offset: -2px;
+}
+
+.editable.cell-selection-anchor {
+    background: #b9dcff !important;
+}
+
+.team-table {
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.editable {
+    -webkit-user-select: text;
+    user-select: text;
+}
+
+
 /* 자동 계산 인원수 */
 .count-cell {
     cursor: default;
@@ -6100,38 +6122,399 @@ function loadTeamDataFromLocalStorage() {
    직접 입력 시 변경 표시만 함
 ================================= */
 
+let teamCellEditStartSnapshot = null;
+
+document.addEventListener("focusin", function(event) {
+    if (event.target.classList.contains("editable")) {
+        teamCellEditStartSnapshot = getTeamCellSnapshot();
+    }
+});
+
 document.addEventListener("input", function(event) {
     if (event.target.classList.contains("editable")) {
+        if (teamCellEditStartSnapshot) {
+            const current = getTeamCellSnapshot();
+            if (JSON.stringify(teamCellEditStartSnapshot) !== JSON.stringify(current)) {
+                const last = teamCellUndoStack[teamCellUndoStack.length - 1];
+                if (!last || JSON.stringify(last) !== JSON.stringify(teamCellEditStartSnapshot)) {
+                    teamCellUndoStack.push(teamCellEditStartSnapshot);
+                    if (teamCellUndoStack.length > TEAM_CELL_HISTORY_LIMIT) teamCellUndoStack.shift();
+                    teamCellRedoStack = [];
+                }
+                teamCellEditStartSnapshot = null;
+            }
+        }
         markTeamDataChanged();
     }
 });
 
 /* =================================
-   복사 / 붙여넣기
+   엑셀식 다중 셀 선택 / 복사 / 붙여넣기 / 삭제
 ================================= */
 
-document.addEventListener("paste", function(event) {
-    const target = event.target;
+let selectedTeamCells = [];
+let selectionAnchorCell = null;
+let selectionDragging = false;
+let selectionPointerId = null;
 
-    if (!target.classList.contains("editable")) return;
+/* 실행 취소 / 다시 실행 기록 */
+let teamCellUndoStack = [];
+let teamCellRedoStack = [];
+const TEAM_CELL_HISTORY_LIMIT = 100;
 
-    event.preventDefault();
+function getTeamCellSnapshot() {
+    return getCurrentTeamData();
+}
 
-    const text = event.clipboardData.getData("text/plain");
-    const values = text.replace(/\r/g, "").split(/\t|\n/);
-    const cells = Array.from(document.querySelectorAll(".editable"));
-    const startIndex = cells.indexOf(target);
+function pushTeamCellHistory() {
+    const snapshot = getTeamCellSnapshot();
+    const last = teamCellUndoStack[teamCellUndoStack.length - 1];
 
-    if (startIndex === -1) return;
+    if (last && JSON.stringify(last) === JSON.stringify(snapshot)) return;
 
-    values.forEach(function(value, index) {
-        const targetIndex = startIndex + index;
-        if (targetIndex < cells.length) {
-            cells[targetIndex].innerText = value.trim();
+    teamCellUndoStack.push(snapshot);
+    if (teamCellUndoStack.length > TEAM_CELL_HISTORY_LIMIT) {
+        teamCellUndoStack.shift();
+    }
+
+    /* 새 작업을 하면 다시 실행 기록 삭제 */
+    teamCellRedoStack = [];
+}
+
+function applyTeamCellSnapshot(snapshot) {
+    if (!Array.isArray(snapshot)) return;
+
+    /* 실행 취소 / 다시 실행은 사용자가 셀을 클릭한 것이 아니므로
+       내용만 바꾸고 편집 포커스(커서)는 완전히 제거 */
+    const activeBefore = document.activeElement;
+
+    if (
+        activeBefore &&
+        activeBefore.classList &&
+        activeBefore.classList.contains("editable")
+    ) {
+        activeBefore.blur();
+    }
+
+    /* 브라우저의 텍스트 선택/캐럿도 제거 */
+    const selection = window.getSelection && window.getSelection();
+    if (selection) {
+        selection.removeAllRanges();
+    }
+
+    clearTeamCellSelection();
+
+    const cells = document.querySelectorAll(".editable");
+
+    isApplyingRemoteTeamData = true;
+
+    /* 내용 변경 중에는 contenteditable을 잠시 끄고 다시 켠다.
+       Ctrl+Shift+Z의 브라우저 기본 편집 상태가 셀에 남는 것을 방지한다. */
+    cells.forEach(function(cell) {
+        cell.setAttribute("data-restore-contenteditable", cell.getAttribute("contenteditable") || "true");
+        cell.setAttribute("contenteditable", "false");
+    });
+
+    cells.forEach(function(cell, index) {
+        cell.innerText = snapshot[index] !== undefined ? snapshot[index] : "";
+    });
+
+    cells.forEach(function(cell) {
+        const restore = cell.getAttribute("data-restore-contenteditable") || "true";
+        cell.setAttribute("contenteditable", restore);
+        cell.removeAttribute("data-restore-contenteditable");
+    });
+
+    isApplyingRemoteTeamData = false;
+
+    updateTeamCounts();
+    markTeamDataChanged();
+
+    /* 일부 브라우저는 Ctrl+Shift+Z 이후 기존 셀의 편집 포커스를
+       다음 프레임에 다시 복원할 수 있어서 한 번 더 강제로 해제 */
+    requestAnimationFrame(function() {
+        const activeAfter = document.activeElement;
+
+        if (
+            activeAfter &&
+            activeAfter.classList &&
+            activeAfter.classList.contains("editable")
+        ) {
+            activeAfter.blur();
         }
+
+        const currentSelection = window.getSelection && window.getSelection();
+        if (currentSelection) {
+            currentSelection.removeAllRanges();
+        }
+
+        clearTeamCellSelection();
+    });
+}
+
+function undoTeamCellChange() {
+    if (!teamCellUndoStack.length) return false;
+
+    const current = getTeamCellSnapshot();
+    const previous = teamCellUndoStack.pop();
+
+    teamCellRedoStack.push(current);
+    applyTeamCellSnapshot(previous);
+
+    return true;
+}
+
+function redoTeamCellChange() {
+    if (!teamCellRedoStack.length) return false;
+
+    const current = getTeamCellSnapshot();
+    const next = teamCellRedoStack.pop();
+
+    teamCellUndoStack.push(current);
+    applyTeamCellSnapshot(next);
+
+    return true;
+}
+
+function getTeamCellMatrix() {
+    const table = document.querySelector("#teamScreen .team-table");
+    if (!table) return [];
+
+    return Array.from(table.querySelectorAll("tr"))
+        .map(function(row) {
+            return Array.from(row.querySelectorAll(".editable"));
+        })
+        .filter(function(row) { return row.length > 0; });
+}
+
+function clearTeamCellSelection() {
+    selectedTeamCells.forEach(function(cell) {
+        cell.classList.remove("cell-selected", "cell-selection-anchor");
+    });
+    selectedTeamCells = [];
+}
+
+function getCellPosition(cell) {
+    const matrix = getTeamCellMatrix();
+    for (let r = 0; r < matrix.length; r++) {
+        const c = matrix[r].indexOf(cell);
+        if (c !== -1) return { row: r, col: c, matrix: matrix };
+    }
+    return null;
+}
+
+function selectTeamCellRange(fromCell, toCell) {
+    const from = getCellPosition(fromCell);
+    const to = getCellPosition(toCell);
+    if (!from || !to) return;
+
+    clearTeamCellSelection();
+
+    const minRow = Math.min(from.row, to.row);
+    const maxRow = Math.max(from.row, to.row);
+    const minCol = Math.min(from.col, to.col);
+    const maxCol = Math.max(from.col, to.col);
+
+    for (let r = minRow; r <= maxRow; r++) {
+        for (let c = minCol; c <= maxCol; c++) {
+            const cell = from.matrix[r] && from.matrix[r][c];
+            if (cell) {
+                cell.classList.add("cell-selected");
+                selectedTeamCells.push(cell);
+            }
+        }
+    }
+
+    fromCell.classList.add("cell-selection-anchor");
+}
+
+function getSelectedRangeData() {
+    if (!selectedTeamCells.length) return "";
+
+    const positions = selectedTeamCells
+        .map(getCellPosition)
+        .filter(Boolean);
+
+    const minRow = Math.min.apply(null, positions.map(function(p) { return p.row; }));
+    const maxRow = Math.max.apply(null, positions.map(function(p) { return p.row; }));
+    const minCol = Math.min.apply(null, positions.map(function(p) { return p.col; }));
+    const maxCol = Math.max.apply(null, positions.map(function(p) { return p.col; }));
+    const matrix = getTeamCellMatrix();
+
+    const selectedSet = new Set(selectedTeamCells);
+    const rows = [];
+
+    for (let r = minRow; r <= maxRow; r++) {
+        const values = [];
+        for (let c = minCol; c <= maxCol; c++) {
+            const cell = matrix[r] && matrix[r][c];
+            values.push(cell && selectedSet.has(cell) ? cell.innerText : "");
+        }
+        rows.push(values.join("\t"));
+    }
+
+    return rows.join("\n");
+}
+
+function deleteSelectedTeamCells() {
+    if (!selectedTeamCells.length) return false;
+
+    pushTeamCellHistory();
+
+    selectedTeamCells.forEach(function(cell) {
+        cell.innerText = "";
     });
 
     markTeamDataChanged();
+    updateTeamCounts();
+    return true;
+}
+
+/* Ctrl/Cmd + 마우스 드래그로만 다중 셀 선택 */
+document.addEventListener("pointerdown", function(event) {
+    const cell = event.target.closest && event.target.closest("#teamScreen .editable");
+    if (!cell) return;
+
+    /* Ctrl(Windows) 또는 Cmd(Mac)를 누르지 않은 일반 클릭은
+       기존처럼 셀 편집만 가능하게 하고 다중 선택은 시작하지 않음 */
+    if (!(event.ctrlKey || event.metaKey)) {
+        clearTeamCellSelection();
+        selectionAnchorCell = null;
+        selectionPointerId = null;
+        selectionDragging = false;
+        return;
+    }
+
+    /* Ctrl/Cmd + 드래그 선택은 기본 텍스트 드래그를 막음 */
+    event.preventDefault();
+
+    selectionAnchorCell = cell;
+    selectionDragging = false;
+    selectionPointerId = event.pointerId;
+
+    clearTeamCellSelection();
+    cell.classList.add("cell-selected", "cell-selection-anchor");
+    selectedTeamCells = [cell];
+});
+
+document.addEventListener("pointermove", function(event) {
+    if (!selectionAnchorCell || event.pointerId !== selectionPointerId) return;
+
+    /* 드래그 도중 Ctrl/Cmd를 놓으면 선택을 중단 */
+    if (!(event.ctrlKey || event.metaKey)) return;
+
+    event.preventDefault();
+
+    const target = document.elementFromPoint(event.clientX, event.clientY);
+    const cell = target && target.closest && target.closest("#teamScreen .editable");
+    if (!cell || cell === selectionAnchorCell) return;
+
+    selectionDragging = true;
+    selectTeamCellRange(selectionAnchorCell, cell);
+});
+
+document.addEventListener("pointerup", function(event) {
+    if (event.pointerId === selectionPointerId) {
+        selectionPointerId = null;
+        selectionAnchorCell = null;
+        selectionDragging = false;
+    }
+});
+
+document.addEventListener("pointercancel", function() {
+    selectionPointerId = null;
+    selectionAnchorCell = null;
+    selectionDragging = false;
+});
+
+/* 선택된 셀 복사: Ctrl/Cmd + C */
+document.addEventListener("copy", function(event) {
+    if (!selectedTeamCells.length) return;
+
+    const text = getSelectedRangeData();
+    if (!text) return;
+
+    event.preventDefault();
+    event.clipboardData.setData("text/plain", text);
+});
+
+/* Ctrl/Cmd + Z: 실행 취소, Ctrl/Cmd + Shift + Z: 다시 실행 */
+/*
+   반드시 capture 단계에서 브라우저 기본 Undo/Redo를 먼저 막는다.
+   이전 코드처럼 editable 셀이 포커스된 경우 return 하면 Ctrl+Shift+Z가
+   브라우저의 contenteditable 기본 Redo로 처리되어 셀이 다시 편집 상태가 됐다.
+*/
+document.addEventListener("keydown", function(event) {
+    const isUndoKey = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z";
+    if (!isUndoKey) return;
+
+    const teamScreen = document.getElementById("teamScreen");
+    if (!teamScreen || teamScreen.style.display === "none") return;
+
+    /* 브라우저 자체 Undo/Redo가 contenteditable에 개입하지 못하도록 즉시 차단 */
+    event.preventDefault();
+    event.stopPropagation();
+
+    /* 현재 편집 포커스와 텍스트 캐럿을 먼저 완전히 제거 */
+    const active = document.activeElement;
+    if (active && active.classList && active.classList.contains("editable")) {
+        active.blur();
+    }
+
+    const selection = window.getSelection && window.getSelection();
+    if (selection) selection.removeAllRanges();
+
+    if (event.shiftKey) {
+        redoTeamCellChange();
+    } else {
+        undoTeamCellChange();
+    }
+}, true);
+
+/* Delete / Backspace: 선택된 모든 셀 내용 삭제 */
+document.addEventListener("keydown", function(event) {
+    if (event.key !== "Delete" && event.key !== "Backspace") return;
+    if (!selectedTeamCells.length) return;
+
+    /* 한 셀을 실제로 편집 중이면 일반 삭제 동작 유지 */
+    if (selectedTeamCells.length === 1 && document.activeElement === selectedTeamCells[0]) return;
+
+    event.preventDefault();
+    deleteSelectedTeamCells();
+});
+
+/* 붙여넣기: 선택 시작 셀부터 표 형태 그대로 붙여넣기 */
+document.addEventListener("paste", function(event) {
+    const target = event.target.closest && event.target.closest("#teamScreen .editable");
+    const startCell = selectedTeamCells.length ? selectedTeamCells[0] : target;
+    if (!startCell) return;
+
+    event.preventDefault();
+
+    const text = event.clipboardData.getData("text/plain").replace(/\r/g, "");
+    const rows = text.split("\n").map(function(row) { return row.split("\t"); });
+    const start = getCellPosition(startCell);
+    if (!start) return;
+
+    const matrix = start.matrix;
+    let changed = false;
+
+    pushTeamCellHistory();
+
+    rows.forEach(function(rowValues, rowOffset) {
+        rowValues.forEach(function(value, colOffset) {
+            const row = matrix[start.row + rowOffset];
+            const cell = row && row[start.col + colOffset];
+            if (!cell) return;
+            cell.innerText = value.trim();
+            changed = true;
+        });
+    });
+
+    if (changed) {
+        markTeamDataChanged();
+        updateTeamCounts();
+    }
 });
 
 
