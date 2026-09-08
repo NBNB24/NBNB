@@ -342,8 +342,6 @@ body {
 
     border-right: 1px solid #444;
 
-    background: #ffff;
-
 }
 
 
@@ -468,8 +466,6 @@ body {
     cursor: text;
 
     font-size: 16px;
-
-    font-weight: bold;
 
     outline: none;
 
@@ -1140,7 +1136,7 @@ body {
 
 .record-table th {
     background: #e6e6e6;
-    font-size: 20px; !improtant
+    font-size: 13px;
     font-weight: bold;
 }
 
@@ -1151,7 +1147,6 @@ body {
 
 .record-player-name {
     font-weight: bold;
-    font-size: 14px;
     background: #fafafa;
     word-break: keep-all;
 }
@@ -1284,7 +1279,7 @@ body {
     border-collapse: collapse;
     table-layout: fixed;
     color: #222;
-    font-size: clamp(10px, 0.85vw, 13px);
+    font-size: clamp(9px, 0.85vw, 13px);
 }
 
 .combined-record-table th,
@@ -5538,54 +5533,20 @@ function manageTeam() {
 
 function goMain() {
 
-
-    /*
-       실제 수정한 경우에만
-       Firebase 저장
-    */
-
-    checkTeamDataChanged();
-
-
-    if (
-        isTeamDataChanged
-    ) {
-
+    /* 실제로 수정한 경우에만 Firebase 저장 */
+    if (isTeamDataChanged) {
         saveTeamData();
-
     }
 
-
-    /*
-       팀 화면 실시간 감지 종료
-    */
-
-    if (
-        teamDataUnsubscribe
-    ) {
-
+    /* 실시간 감지는 화면을 나갈 때 종료 */
+    if (teamDataUnsubscribe) {
         teamDataUnsubscribe();
-
-
-        teamDataUnsubscribe =
-            null;
-
+        teamDataUnsubscribe = null;
     }
 
-
-    document.getElementById(
-        "teamScreen"
-    ).style.display =
-        "none";
-
-
-    document.getElementById(
-        "mainScreen"
-    ).style.display =
-        "flex";
-
+    document.getElementById("teamScreen").style.display = "none";
+    document.getElementById("mainScreen").style.display = "flex";
 }
-
 
 
 
@@ -6002,575 +5963,176 @@ function updateTeamCounts() {
 }
 
 /* =================================
-   팀 데이터 변경 / 실시간 동기화
+   팀 데이터 실시간 동기화
 ================================= */
 
-let originalTeamData = [];
-
-let isTeamDataChanged = false;
-
 let teamDataUnsubscribe = null;
-
+let originalTeamData = [];
+let isTeamDataChanged = false;
 let isApplyingRemoteTeamData = false;
 
 function getCurrentTeamData() {
-
-    const cells =
-        document.querySelectorAll(
-            ".editable"
-        );
-
-    return Array.from(cells).map(
-        function(cell) {
-
-            return cell.innerText;
-
-        }
-    );
-
+    return Array.from(document.querySelectorAll(".editable"))
+        .map(function(cell) { return cell.innerText; });
 }
 
-function checkTeamDataChanged() {
-
-    if (isApplyingRemoteTeamData) {
-
-        return false;
-
+function markTeamDataChanged() {
+    if (!isApplyingRemoteTeamData) {
+        isTeamDataChanged = true;
     }
-
-
-    const currentTeamData =
-        getCurrentTeamData();
-
-
-    isTeamDataChanged =
-        JSON.stringify(currentTeamData)
-        !==
-        JSON.stringify(originalTeamData);
-
-
-    return isTeamDataChanged;
-
 }
 
-   
 /* =================================
-   자동 저장
+   Firebase 저장
 ================================= */
 
-function saveTeamData() {
-
+async function saveTeamData() {
     updateTeamCounts();
 
-    const cells = document.querySelectorAll(".editable");
+    const data = getCurrentTeamData();
 
-    const data = [];
+    localStorage.setItem("nbnbTeamData", JSON.stringify(data));
 
-    cells.forEach(function(cell) {
-
-        data.push(cell.innerText);
-
-    });
-
-
-    /* 기존 기기에도 백업 */
-
-    localStorage.setItem(
-
-        "nbnbTeamData",
-
-        JSON.stringify(data)
-
-    );
-
-
-    /* Firebase 연결 확인 */
-
-    if (
-
-        !window.firebaseDB ||
-
-        !window.firebaseFirestore
-
-    ) {
-
+    if (!window.firebaseDB || !window.firebaseFirestore) {
         console.log("Firebase 연결 대기 중...");
-
-        return;
-
+        return false;
     }
 
+    const { doc, setDoc } = window.firebaseFirestore;
 
-    const {
-
-        doc,
-
-        setDoc
-
-    } = window.firebaseFirestore;
-
-
-    const db = window.firebaseDB;
-
-
-    /* Firestore 공용 저장 */
-
-    setDoc(
-
-        doc(
-
-            db,
-
-            "teamData",
-
-            "current"
-
-        ),
-
-        {
-
-            data: data,
-
-            updatedAt: new Date().toISOString()
-
-        }
-
-    )
-
-     .then(function() {
-
-
-    originalTeamData =
-        getCurrentTeamData();
-
-
-    isTeamDataChanged =
-        false;
-
-
-    console.log(
-        "🔥 팀 데이터 Firebase 저장 완료"
-    );
-
-})
-
-    .catch(function(error) {
-
-        console.error(
-
-            "Firebase 팀 데이터 저장 오류:",
-
-            error
-
+    try {
+        await setDoc(
+            doc(window.firebaseDB, "teamData", "current"),
+            {
+                data: data,
+                updatedAt: new Date().toISOString()
+            }
         );
 
-    });
+        originalTeamData = [...data];
+        isTeamDataChanged = false;
+        console.log("🔥 팀 데이터 Firebase 저장 완료");
+        return true;
 
+    } catch (error) {
+        console.error("Firebase 팀 데이터 저장 오류:", error);
+        return false;
+    }
 }
 
-
 /* =================================
-   저장된 데이터 불러오기
+   저장된 데이터 불러오기 + 실시간 감시
 ================================= */
 
 function loadTeamData() {
 
+    if (teamDataUnsubscribe) return;
 
-    /* 이미 실시간 연결되어 있으면
-       중복 연결하지 않음 */
-
-    if (teamDataUnsubscribe) {
-
-        return;
-
-    }
-
-
-    /* Firebase 연결 전 */
-
-    if (
-        !window.firebaseDB ||
-        !window.firebaseFirestore
-    ) {
-
+    if (!window.firebaseDB || !window.firebaseFirestore) {
         loadTeamDataFromLocalStorage();
-
-        originalTeamData =
-            getCurrentTeamData();
-
-        isTeamDataChanged =
-            false;
-
+        originalTeamData = getCurrentTeamData();
+        isTeamDataChanged = false;
         return;
-
     }
 
-
-    const {
-        doc,
-        onSnapshot
-    } = window.firebaseFirestore;
-
-
-    const db =
-        window.firebaseDB;
-
-
-    const teamDocRef =
-        doc(
-            db,
-            "teamData",
-            "current"
-        );
-
-
-    /* =================================
-       Firebase 실시간 감지 시작
-    ================================= */
-
-    teamDataUnsubscribe =
-        onSnapshot(
-
-            teamDocRef,
-
-            function(snapshot) {
-
-
-                /* Firebase 데이터 없음 */
-
-                if (
-                    !snapshot.exists()
-                ) {
-
-                    loadTeamDataFromLocalStorage();
-
-                    originalTeamData =
-                        getCurrentTeamData();
-
-                    isTeamDataChanged =
-                        false;
-
-                    return;
-
-                }
-
-
-                const firebaseData =
-                    snapshot.data().data;
-
-
-                if (
-                    !Array.isArray(
-                        firebaseData
-                    )
-                ) {
-
-                    return;
-
-                }
-
-
-                /*
-                   이 기기에서 아직 저장하지 않은 직접 수정이 있으면
-                   현재 입력 내용을 보호한다.
-                   수정하지 않은 기기는 원격 변경을 즉시 반영한다.
-                */
-
-                if (isTeamDataChanged) {
-                    return;
-                }
-
-
-                /*
-                   Firebase 데이터
-                   화면에 적용 중 표시
-                */
-
-                isApplyingRemoteTeamData =
-                    true;
-
-
-                const cells =
-                    document.querySelectorAll(
-                        ".editable"
-                    );
-
-
-                cells.forEach(
-                    function(
-                        cell,
-                        index
-                    ) {
-
-
-                        if (
-                            firebaseData[index]
-                            !== undefined
-                        ) {
-
-                            cell.innerText =
-                                firebaseData[index];
-
-                        }
-
-
-                    }
-                );
-
-
-                /* 인원수 자동 계산 */
-
-                updateTeamCounts();
-
-
-                /* 현재 기기에도 백업 */
-
-                localStorage.setItem(
-
-                    "nbnbTeamData",
-
-                    JSON.stringify(
-                        firebaseData
-                    )
-
-                );
-
-
-                /*
-                   현재 Firebase 데이터를
-                   새로운 기준 데이터로 저장
-                */
-
-                originalTeamData =
-                    [...firebaseData];
-
-
-                isTeamDataChanged =
-                    false;
-
-
-                isApplyingRemoteTeamData =
-                    false;
-
-
-                console.log(
-                    "🔥 팀 데이터 실시간 동기화 완료"
-                );
-
-
-            },
-
-
-            function(error) {
-
-                console.error(
-
-                    "Firebase 팀 데이터 실시간 오류:",
-
-                    error
-
-                );
-
+    const { doc, onSnapshot } = window.firebaseFirestore;
+    const teamDocRef = doc(window.firebaseDB, "teamData", "current");
+
+    teamDataUnsubscribe = onSnapshot(
+        teamDocRef,
+        function(snapshot) {
+            if (!snapshot.exists()) {
+                loadTeamDataFromLocalStorage();
+                originalTeamData = getCurrentTeamData();
+                isTeamDataChanged = false;
+                return;
             }
 
-        );
+            const firebaseData = snapshot.data().data;
+            if (!Array.isArray(firebaseData)) return;
 
+            /* Firebase 데이터는 최신 데이터이므로 항상 화면에 반영 */
+            isApplyingRemoteTeamData = true;
+
+            const cells = document.querySelectorAll(".editable");
+            cells.forEach(function(cell, index) {
+                cell.innerText = firebaseData[index] !== undefined ? firebaseData[index] : "";
+            });
+
+            updateTeamCounts();
+            localStorage.setItem("nbnbTeamData", JSON.stringify(firebaseData));
+
+            /* 방금 받은 최신 Firebase 데이터가 새로운 기준 */
+            originalTeamData = [...firebaseData];
+            isTeamDataChanged = false;
+            isApplyingRemoteTeamData = false;
+
+            console.log("🔥 팀 데이터 실시간 반영 완료");
+        },
+        function(error) {
+            console.error("Firebase 실시간 동기화 오류:", error);
+        }
+    );
 }
 
 function loadTeamDataFromLocalStorage() {
-
-    const savedData =
-
-        localStorage.getItem(
-
-            "nbnbTeamData"
-
-        );
-
-
-    if (!savedData) {
-
-        return;
-
-    }
-
+    const savedData = localStorage.getItem("nbnbTeamData");
+    if (!savedData) return;
 
     try {
+        const data = JSON.parse(savedData);
+        const cells = document.querySelectorAll(".editable");
 
-        const data =
-
-            JSON.parse(
-
-                savedData
-
-            );
-
-
-        const cells =
-
-            document.querySelectorAll(
-
-                ".editable"
-
-            );
-
-
-        cells.forEach(
-
-            function(cell, index) {
-
-                if (
-
-                    data[index]
-
-                    !== undefined
-
-                ) {
-
-                    cell.innerText =
-
-                        data[index];
-
-                }
-
-            }
-
-        );
-
-        /* 저장값을 불러온 뒤 인원수 자동 재계산 */
+        isApplyingRemoteTeamData = true;
+        cells.forEach(function(cell, index) {
+            cell.innerText = data[index] !== undefined ? data[index] : "";
+        });
         updateTeamCounts();
+        isApplyingRemoteTeamData = false;
 
+    } catch(error) {
+        isApplyingRemoteTeamData = false;
+        console.error("팀 데이터 불러오기 오류:", error);
     }
-
-    catch(error) {
-
-        console.error(
-
-            "팀 데이터 불러오기 오류:",
-
-            error
-
-        );
-
-    }
-   
-originalTeamData =
-    getCurrentTeamData();
-
-isTeamDataChanged =
-    false;
-   
 }
 
 /* =================================
-   직접 입력 시 자동 저장
+   직접 입력 시 변경 표시만 함
 ================================= */
 
-document.addEventListener(
-    "input",
-    function(event) {
-
-        if (
-            event.target.classList.contains(
-                "editable"
-            )
-        ) {
-
-            /* 사용자가 직접 수정한 경우에만 저장 대상으로 표시 */
-            if (!isApplyingRemoteTeamData) {
-                isTeamDataChanged = true;
-            }
-
-        }
-
+document.addEventListener("input", function(event) {
+    if (event.target.classList.contains("editable")) {
+        markTeamDataChanged();
     }
-);
-
-
+});
 
 /* =================================
    복사 / 붙여넣기
 ================================= */
 
 document.addEventListener("paste", function(event) {
-
-
     const target = event.target;
 
-
-    /* 입력 가능한 빈칸이 아니면 종료 */
-
-    if (
-        !target.classList.contains("editable")
-    ) {
-
-        return;
-
-    }
-
+    if (!target.classList.contains("editable")) return;
 
     event.preventDefault();
 
-
-    const text = event.clipboardData.getData(
-        "text/plain"
-    );
-
-
-    /*
-       엑셀 복사 데이터 처리
-
-       탭 = 열 이동
-       줄바꿈 = 다음 행
-    */
-
-    const values = text
-        .replace(/\r/g, "")
-        .split(/\t|\n/);
-
-
-    const cells = Array.from(
-        document.querySelectorAll(".editable")
-    );
-
-
+    const text = event.clipboardData.getData("text/plain");
+    const values = text.replace(/\r/g, "").split(/\t|\n/);
+    const cells = Array.from(document.querySelectorAll(".editable"));
     const startIndex = cells.indexOf(target);
 
-
-    if (startIndex === -1) {
-
-        return;
-
-    }
-
+    if (startIndex === -1) return;
 
     values.forEach(function(value, index) {
-
-
-        const targetIndex =
-            startIndex + index;
-
-
-        if (
-            targetIndex < cells.length
-        ) {
-
-            cells[targetIndex].innerText =
-                value.trim();
-
+        const targetIndex = startIndex + index;
+        if (targetIndex < cells.length) {
+            cells[targetIndex].innerText = value.trim();
         }
-
-
     });
 
-
-    /* 붙여넣기는 사용자의 직접 수정이므로 저장 대상으로 표시 */
-
-    isTeamDataChanged = true;
-
-
+    markTeamDataChanged();
 });
-
 
 
 /* =================================
@@ -6831,11 +6393,9 @@ from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
 import {
     getAuth,
-signInWithEmailAndPassword,
-signOut,
-onAuthStateChanged,
-setPersistence,
-browserSessionPersistence
+    signInWithEmailAndPassword,
+    signOut,
+    onAuthStateChanged
 }
 from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 
@@ -6858,11 +6418,6 @@ const db = getFirestore(app);
 
 const auth = getAuth(app);
 
-setPersistence(
-    auth,
-    browserSessionPersistence
-);
-
 /* =================================
    기존 일반 JavaScript에서도
    Firebase를 사용할 수 있도록 연결
@@ -6882,7 +6437,6 @@ window.firebaseFirestore = {
 
     updateDoc,
     deleteDoc,
-
     onSnapshot
 
 };
