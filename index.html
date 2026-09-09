@@ -4960,31 +4960,42 @@ function createPlayerPanel(
                 }"
             >
 
-                <td
-                    class="
-                        record-player-name
-                        ${
-                            isBonusRow
-                                ? "record-bonus-player-name editable"
-                                : (
-                                    playerName
-                                        ? ""
-                                        : "record-empty-name"
-                                )
-                        }
-                    "
-                    ${
-                        isBonusRow
-                            ? `
-                                data-game-number="${gameNumber}"
-                                data-team-name="${team.name}"
-                                data-bonus-index="${bonusIndex}"
-                              `
-                            : ""
-                    }
-                >
-                    ${playerName}
-                </td>
+<td
+    class="
+        record-player-name
+        ${
+            isBonusRow
+                ? "record-bonus-player-name editable"
+                : (
+                    playerName
+                        ? ""
+                        : "record-empty-name editable"
+                )
+        }
+    "
+    ${
+        isBonusRow
+            ? `
+                data-game-number="${gameNumber}"
+                data-team-name="${team.name}"
+                data-bonus-index="${bonusIndex}"
+              `
+            : (
+                !playerName
+                    ? `
+                        contenteditable="true"
+                        data-game-number="${gameNumber}"
+                        data-quarter-number="${quarterNumber}"
+                        data-team-name="${team.name}"
+                        data-player-index="${index}"
+                        oninput="saveEmptyPlayerName(this)"
+                      `
+                    : ""
+            )
+    }
+>
+    ${playerName}
+</td>
 
 
                 <td>
