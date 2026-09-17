@@ -3031,28 +3031,71 @@ function historyCell(value) {
 }
 
 function getHistoryPlayerName(record, game, teamName, playerIndex) {
-    if (playerIndex >= 9) {
-        const key = getBonusPlayerKey(game.number, teamName, playerIndex - 9);
-        return record.data.gameBonusPlayerData && record.data.gameBonusPlayerData[key] !== undefined
-            ? record.data.gameBonusPlayerData[key] || ""
-            : "";
-    }
     const team = game.team1.name === teamName ? game.team1 : game.team2;
-    return team.players[playerIndex] || "";
+
+    // 일반 선수 행
+    if (playerIndex < 9) {
+        return team.players[playerIndex] || "";
+    }
+
+    // 연령점수 행은 저장된 이름을 최우선으로 사용합니다.
+    const bonusIndex = playerIndex - 9;
+    const key = getBonusPlayerKey(game.number, teamName, bonusIndex);
+    const savedBonus = record.data.gameBonusPlayerData && record.data.gameBonusPlayerData[key];
+    if (savedBonus !== undefined && String(savedBonus).trim() !== "") {
+        return String(savedBonus).trim();
+    }
+
+    // 예전 저장 데이터에서 이름이 저장되지 않은 경우에도
+    // 팀 명단 중 연령점수 대상자를 순서대로 찾아 연결합니다.
+    // 현재 경기 화면의 연령점수 대상자 명단을 이용해 9/10번 행을 복원합니다.
+    const agePlayers = Array.isArray(record.data.ageScorePlayers)
+        ? record.data.ageScorePlayers.map(function(name) { return String(name || '').trim(); })
+        : getAgeScorePlayers();
+    const eligible = team.players.filter(function(name) {
+        return name && agePlayers.includes(String(name).trim());
+    });
+    return eligible[bonusIndex] || "";
 }
 
 function calculateHistoryRow(record, game, quarterNumber, teamName, playerIndex) {
+    const data = record && record.data ? record.data : {};
     const key = getGameRecordKey(game.number, quarterNumber, teamName);
-    const row = (record.data.gameRecordData && record.data.gameRecordData[key] && record.data.gameRecordData[key][playerIndex]) || {};
+    const rows = data.gameRecordData && data.gameRecordData[key];
+    const row = rows && rows[playerIndex] ? rows[playerIndex] : {};
     const name = getHistoryPlayerName(record, game, teamName, playerIndex);
-    const bonus = playerIndex >= 9 && !!name ? 1 : 0;
+
+    // 실제 경기 기록과 동일하게, 연령점수 기록지(맨 아래 2줄)에
+    // 연령점수 대상 선수가 입력된 경우에만 2/3점슛에 +1점을 적용합니다.
+    let bonus = 0;
+    if (playerIndex >= 9 && name) {
+        const agePlayers = Array.isArray(data.ageScorePlayers)
+            ? data.ageScorePlayers
+            : null;
+        if (agePlayers) {
+            bonus = agePlayers.some(function(p) {
+                return String(p || '').trim() === String(name || '').trim();
+            }) ? 1 : 0;
+        } else {
+            // 구버전 저장기록에는 대상자 목록이 없을 수 있으므로
+            // 기존 동작과 호환되게 이름이 입력된 보너스 행은 +1 처리합니다.
+            bonus = 1;
+        }
+    }
+
     const freeThrow = Number(row.freeThrow) || 0;
     const twoPoint = Number(row.twoPoint) || 0;
     const threePoint = Number(row.threePoint) || 0;
     const twoScore = twoPoint * (2 + bonus);
     const threeScore = threePoint * (3 + bonus);
+
     return {
-        name, freeThrow, twoPoint, twoScore, threePoint, threeScore,
+        name: name,
+        freeThrow: freeThrow,
+        twoPoint: twoPoint,
+        twoScore: twoScore,
+        threePoint: threePoint,
+        threeScore: threeScore,
         totalScore: freeThrow + twoScore + threeScore,
         rebound: Number(row.rebound) || 0,
         assist: Number(row.assist) || 0,
@@ -3062,16 +3105,60 @@ function calculateHistoryRow(record, game, quarterNumber, teamName, playerIndex)
     };
 }
 
+/*
+ * 경기기록 > 보기용 선수 합산
+ * 일반 선수 행(0~8)과 연령점수 행(9~10)에 같은 이름이 있으면
+ * 한 명으로 합칩니다.
+ */
+function getMergedHistoryRows(record, game, quarterNumber, teamName) {
+    const merged = [];
+    const nameToIndex = Object.create(null);
+
+    for (let i = 0; i < 11; i++) {
+        const row = calculateHistoryRow(record, game, quarterNumber, teamName, i);
+        const name = String(row.name || '').trim();
+
+        if (!name) {
+            // 빈 행은 기존 기록지와 동일하게 표시
+            merged.push(row);
+            continue;
+        }
+
+        if (nameToIndex[name] !== undefined) {
+            const target = merged[nameToIndex[name]];
+            target.freeThrow += row.freeThrow;
+            target.twoPoint += row.twoPoint;
+            target.twoScore += row.twoScore;
+            target.threePoint += row.threePoint;
+            target.threeScore += row.threeScore;
+            target.totalScore += row.totalScore;
+            target.rebound += row.rebound;
+            target.assist += row.assist;
+            target.steal += row.steal;
+            target.block += row.block;
+            target.foul += row.foul;
+        } else {
+            nameToIndex[name] = merged.length;
+            merged.push(row);
+        }
+    }
+
+    return merged;
+}
+
 function showSavedGameRecord(recordId) {
     const record = getSavedHistoryRecord(recordId);
-    if (!record || !record.data) return;
+    if (!record || !record.data) {
+        console.warn('저장된 경기 기록을 찾을 수 없습니다:', recordId);
+        return;
+    }
 
-    const old = document.getElementById("gameHistoryViewOverlay");
+    const old = document.getElementById('gameHistoryViewOverlay');
     if (old) old.remove();
 
-    const overlay = document.createElement("div");
-    overlay.id = "gameHistoryViewOverlay";
-    overlay.className = "game-history-view-overlay";
+    const overlay = document.createElement('div');
+    overlay.id = 'gameHistoryViewOverlay';
+    overlay.className = 'game-history-view-overlay';
 
     let html = `<div class="game-history-view-dialog">
         <div class="game-history-view-title">
@@ -3079,49 +3166,58 @@ function showSavedGameRecord(recordId) {
             <button type="button" class="readonly-close-button" onclick="closeSavedGameRecord()">닫기</button>
         </div>`;
 
-    (record.data.games || []).forEach(function(game) {
-        html += `<div class="readonly-game-block">
-            <div class="readonly-game-heading">${game.number}경기 · ${escapeHtml(game.team1.name)}팀 vs ${escapeHtml(game.team2.name)}팀 · ${game.quarter}쿼터</div>`;
+    const games = Array.isArray(record.data.games) ? record.data.games : [];
 
-        for (let q = 1; q <= game.quarter; q++) {
-            const left = [], right = [];
-            let leftTotal = 0, rightTotal = 0;
-            for (let i = 0; i < 11; i++) {
-                const l = calculateHistoryRow(record, game, q, game.team1.name, i);
-                const r = calculateHistoryRow(record, game, q, game.team2.name, i);
-                left.push(l); right.push(r);
-                leftTotal += l.totalScore; rightTotal += r.totalScore;
-            }
+    games.forEach(function(game) {
+        if (!game || !game.team1 || !game.team2) return;
+
+        const quarterCount = Math.max(0, Number(game.quarter) || 0);
+
+        html += `<div class="readonly-game-block">
+            <div class="readonly-game-heading">${game.number}경기 · ${escapeHtml(game.team1.name)}팀 vs ${escapeHtml(game.team2.name)}팀 · ${quarterCount}쿼터</div>`;
+
+        for (let q = 1; q <= quarterCount; q++) {
+            const left = getMergedHistoryRows(record, game, q, game.team1.name);
+            const right = getMergedHistoryRows(record, game, q, game.team2.name);
+            const leftTotal = left.reduce(function(sum, r) { return sum + (Number(r.totalScore) || 0); }, 0);
+            const rightTotal = right.reduce(function(sum, r) { return sum + (Number(r.totalScore) || 0); }, 0);
 
             const makeRows = function(rows) {
                 let out = rows.map(function(r) {
                     return `<tr>
                         <td>${historyCell(r.name)}</td><td>${r.freeThrow}</td><td>${r.twoPoint}</td><td>${r.twoScore}</td><td>${r.threePoint}</td><td>${r.threeScore}</td><td>${r.totalScore}</td><td>${r.rebound}</td><td>${r.assist}</td><td>${r.steal}</td><td>${r.block}</td><td>${r.foul}</td>
                     </tr>`;
-                }).join("");
-                const sum = function(field){ return rows.reduce((a,r)=>a+(Number(r[field])||0),0); };
+                }).join('');
+
+                const sum = function(field) {
+                    return rows.reduce(function(a, r) {
+                        return a + (Number(r[field]) || 0);
+                    }, 0);
+                };
+
                 out += `<tr style="font-weight:700;background:#20252e;">
-                    <td>합계</td><td>${sum("freeThrow")}</td><td>${sum("twoPoint")}</td><td>${sum("twoScore")}</td><td>${sum("threePoint")}</td><td>${sum("threeScore")}</td><td>${sum("totalScore")}</td><td>${sum("rebound")}</td><td>${sum("assist")}</td><td>${sum("steal")}</td><td>${sum("block")}</td><td>${sum("foul")}</td>
+                    <td>합계</td><td>${sum('freeThrow')}</td><td>${sum('twoPoint')}</td><td>${sum('twoScore')}</td><td>${sum('threePoint')}</td><td>${sum('threeScore')}</td><td>${sum('totalScore')}</td><td>${sum('rebound')}</td><td>${sum('assist')}</td><td>${sum('steal')}</td><td>${sum('block')}</td><td>${sum('foul')}</td>
                 </tr>`;
                 return out;
             };
 
-            const table = function(teamName, rows){
+            const table = function(teamName, rows) {
                 return `<div class="readonly-team-panel"><h4>[${escapeHtml(teamName)}팀]</h4><table class="readonly-table"><thead><tr><th>성명</th><th>자유투</th><th>2점</th><th>2점득점</th><th>3점</th><th>3점득점</th><th>총득점</th><th>리바운드</th><th>어시스트</th><th>스틸</th><th>블록</th><th>파울</th></tr></thead><tbody>${makeRows(rows)}</tbody></table></div>`;
             };
 
-            // 저장된 당시 쿼터별 기록만 읽기 전용으로 표시합니다.
-            html += `<div class="readonly-quarter-block"><div class="readonly-quarter-title"><div>[${escapeHtml(game.team1.name)}팀] ${leftTotal}점</div><div>${game.number}경기 ${q}쿼터 기록지</div><div>[${escapeHtml(game.team2.name)}팀] ${rightTotal}점</div></div><div class="readonly-team-grid">${table(game.team1.name,left)}${table(game.team2.name,right)}</div></div>`;
+            html += `<div class="readonly-quarter-block"><div class="readonly-quarter-title"><div>[${escapeHtml(game.team1.name)}팀] ${leftTotal}점</div><div>${game.number}경기 ${q}쿼터 기록지</div><div>[${escapeHtml(game.team2.name)}팀] ${rightTotal}점</div></div><div class="readonly-team-grid">${table(game.team1.name, left)}${table(game.team2.name, right)}</div></div>`;
         }
+
         html += `</div>`;
     });
 
     html += `</div>`;
     overlay.innerHTML = html;
-    overlay.addEventListener("click", function(e){ if(e.target === overlay) closeSavedGameRecord(); });
+    overlay.addEventListener('click', function(e) {
+        if (e.target === overlay) closeSavedGameRecord();
+    });
     document.body.appendChild(overlay);
 }
-
 
 
 function downloadSavedGameRecord(recordId) {
@@ -3139,14 +3235,27 @@ function downloadSavedGameRecord(recordId) {
             rows.push([`${game.number}경기 ${q}쿼터 기록지`, "", ""]);
             rows.push(["팀","성명","자유투","2점","2점득점","3점","3점득점","총득점","리바운드","어시스트","스틸","블록","파울"]);
             [game.team1.name, game.team2.name].forEach(function(teamName){
-                for(let i=0;i<11;i++){
-                    const r=calculateHistoryRow(record,game,q,teamName,i);
+                const historyRows = getMergedHistoryRows(record, game, q, teamName);
+                historyRows.forEach(function(r){
                     rows.push([teamName,r.name,r.freeThrow,r.twoPoint,r.twoScore,r.threePoint,r.threeScore,r.totalScore,r.rebound,r.assist,r.steal,r.block,r.foul]);
-                }
+                });
                 rows.push([]);
             });
             rows.push([]);
         }
+
+        // 경기 전체 누적 기록
+        rows.push([`${game.number}경기 전체 누적`, "", ""]);
+        rows.push(["팀","성명","자유투","2점","2점득점","3점","3점득점","총득점","리바운드","어시스트","스틸","블록","파울"]);
+        [game.team1.name, game.team2.name].forEach(function(teamName){
+            const historyRows = getGameMergedHistoryRows(record, game, teamName);
+            historyRows.forEach(function(r){
+                rows.push([teamName,r.name,r.freeThrow,r.twoPoint,r.twoScore,r.threePoint,r.threeScore,r.totalScore,r.rebound,r.assist,r.steal,r.block,r.foul]);
+            });
+            rows.push([]);
+        });
+        rows.push([]);
+
         const xmlRows = rows.map(function(row){
             return `<Row>${row.map(function(v){
                 const type = typeof v === "number" ? "Number" : "String";
@@ -4960,42 +5069,34 @@ function createPlayerPanel(
                 }"
             >
 
-<td
-    class="
-        record-player-name
-        ${
-            isBonusRow
-                ? "record-bonus-player-name editable"
-                : (
-                    playerName
-                        ? ""
-                        : "record-empty-name editable"
-                )
-        }
-    "
-    ${
-        isBonusRow
-            ? `
-                data-game-number="${gameNumber}"
-                data-team-name="${team.name}"
-                data-bonus-index="${bonusIndex}"
-              `
-            : (
-                !playerName
-                    ? `
-                        contenteditable="true"
-                        data-game-number="${gameNumber}"
-                        data-quarter-number="${quarterNumber}"
-                        data-team-name="${team.name}"
-                        data-player-index="${index}"
-                        oninput="saveEmptyPlayerName(this)"
-                      `
-                    : ""
-            )
-    }
->
-    ${playerName}
-</td>
+                <td
+                    class="
+                        record-player-name
+                        ${
+                            isBonusRow
+                                ? "record-bonus-player-name editable"
+                                : (
+                                    playerName
+                                        ? ""
+                                        : "record-empty-name"
+                                )
+                        }
+                    "
+                    ${
+                        isBonusRow
+                            ? `
+                                data-game-number="${gameNumber}"
+                                data-team-name="${team.name}"
+                                data-bonus-index="${bonusIndex}"
+                                contenteditable="true"
+                                oninput="saveBonusPlayerName(this)"
+                                onkeydown="if(event.key === 'Enter'){ event.preventDefault(); this.blur(); }"
+                              `
+                            : ""
+                    }
+                >
+                    ${playerName}
+                </td>
 
 
                 <td>
@@ -5482,6 +5583,7 @@ async function confirmSaveGame() {
         games: window.nbnbGames || [],
         gameRecordData: window.gameRecordData || {},
         gameBonusPlayerData: window.gameBonusPlayerData || {},
+        ageScorePlayers: getAgeScorePlayers(),
         teamData: getTeamsFromTable()
     }));
 
