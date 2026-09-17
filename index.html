@@ -3417,15 +3417,18 @@ document.addEventListener("keydown", function(event) {
    화면 이동
 ================================= */
 
-function startGame() {
+async function startGame() {
 
     if (!requireAdminAccess()) return;
 
     try {
 
+        /* 경기 시작 직전에 Firebase의 최신 팀/선수 명단을 먼저 반영 */
+        await loadTeamData();
+
         /* 현재 입력 내용 저장 */
 
-        saveTeamData();
+        await saveTeamData();
 
 
         /* 팀 데이터 가져오기 */
@@ -5666,6 +5669,7 @@ function goMain() {
     if (teamDataUnsubscribe) {
         teamDataUnsubscribe();
         teamDataUnsubscribe = null;
+        teamDataReadyPromise = null;
     }
 
     document.getElementById("teamScreen").style.display = "none";
@@ -6091,6 +6095,7 @@ function updateTeamCounts() {
 ================================= */
 
 let teamDataUnsubscribe = null;
+let teamDataReadyPromise = null;
 let originalTeamData = [];
 let isTeamDataChanged = false;
 let isApplyingRemoteTeamData = false;
@@ -6149,54 +6154,68 @@ async function saveTeamData() {
 ================================= */
 
 function loadTeamData() {
-
-    if (teamDataUnsubscribe) return;
+    /* 이미 실시간 감시 중이면 최초 Firebase 반영 완료까지 대기 */
+    if (teamDataUnsubscribe) {
+        return teamDataReadyPromise || Promise.resolve();
+    }
 
     if (!window.firebaseDB || !window.firebaseFirestore) {
         loadTeamDataFromLocalStorage();
         originalTeamData = getCurrentTeamData();
         isTeamDataChanged = false;
-        return;
+        return Promise.resolve();
     }
 
     const { doc, onSnapshot } = window.firebaseFirestore;
     const teamDocRef = doc(window.firebaseDB, "teamData", "current");
 
-    teamDataUnsubscribe = onSnapshot(
-        teamDocRef,
-        function(snapshot) {
-            if (!snapshot.exists()) {
-                loadTeamDataFromLocalStorage();
-                originalTeamData = getCurrentTeamData();
+    teamDataReadyPromise = new Promise(function(resolve) {
+        let firstSnapshotHandled = false;
+
+        teamDataUnsubscribe = onSnapshot(
+            teamDocRef,
+            function(snapshot) {
+                if (!snapshot.exists()) {
+                    loadTeamDataFromLocalStorage();
+                    originalTeamData = getCurrentTeamData();
+                    isTeamDataChanged = false;
+                    if (!firstSnapshotHandled) { firstSnapshotHandled = true; resolve(); }
+                    return;
+                }
+
+                const firebaseData = snapshot.data().data;
+                if (!Array.isArray(firebaseData)) {
+                    if (!firstSnapshotHandled) { firstSnapshotHandled = true; resolve(); }
+                    return;
+                }
+
+                isApplyingRemoteTeamData = true;
+                const cells = document.querySelectorAll(".editable");
+                cells.forEach(function(cell, index) {
+                    cell.innerText = firebaseData[index] !== undefined ? firebaseData[index] : "";
+                });
+                updateTeamCounts();
+                localStorage.setItem("nbnbTeamData", JSON.stringify(firebaseData));
+                originalTeamData = [...firebaseData];
                 isTeamDataChanged = false;
-                return;
+                isApplyingRemoteTeamData = false;
+
+                if (!firstSnapshotHandled) { firstSnapshotHandled = true; resolve(); }
+                console.log("🔥 팀 데이터 실시간 반영 완료");
+            },
+            function(error) {
+                console.error("Firebase 실시간 동기화 오류:", error);
+                if (!firstSnapshotHandled) {
+                    firstSnapshotHandled = true;
+                    loadTeamDataFromLocalStorage();
+                    updateTeamCounts();
+                    resolve();
+                }
             }
+        );
+    });
 
-            const firebaseData = snapshot.data().data;
-            if (!Array.isArray(firebaseData)) return;
-
-            /* Firebase 데이터는 최신 데이터이므로 항상 화면에 반영 */
-            isApplyingRemoteTeamData = true;
-
-            const cells = document.querySelectorAll(".editable");
-            cells.forEach(function(cell, index) {
-                cell.innerText = firebaseData[index] !== undefined ? firebaseData[index] : "";
-            });
-
-            updateTeamCounts();
-            localStorage.setItem("nbnbTeamData", JSON.stringify(firebaseData));
-
-            /* 방금 받은 최신 Firebase 데이터가 새로운 기준 */
-            originalTeamData = [...firebaseData];
-            isTeamDataChanged = false;
-            isApplyingRemoteTeamData = false;
-
-            console.log("🔥 팀 데이터 실시간 반영 완료");
-        },
-        function(error) {
-            console.error("Firebase 실시간 동기화 오류:", error);
-        }
-    );
+    return teamDataReadyPromise;
 }
 
 function loadTeamDataFromLocalStorage() {
@@ -6247,8 +6266,44 @@ document.addEventListener("input", function(event) {
             }
         }
         markTeamDataChanged();
+        updateTeamCounts();
     }
 });
+
+/* =================================
+   팀/선수 관리: Enter → 바로 아래 칸으로 이동
+================================= */
+document.addEventListener("keydown", function(event) {
+    if (event.key !== "Enter") return;
+
+    const teamScreen = document.getElementById("teamScreen");
+    if (!teamScreen || teamScreen.style.display === "none") return;
+
+    const cell = event.target.closest && event.target.closest("#teamScreen .editable");
+    if (!cell) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const position = getCellPosition(cell);
+    if (!position) return;
+
+    const nextRow = position.matrix[position.row + 1];
+    const nextCell = nextRow && nextRow[position.col];
+
+    cell.blur();
+    if (nextCell) {
+        nextCell.focus();
+        const selection = window.getSelection && window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(nextCell);
+        range.collapse(false);
+        if (selection) {
+            selection.removeAllRanges();
+            selection.addRange(range);
+        }
+    }
+}, true);
 
 /* =================================
    엑셀식 다중 셀 선택 / 복사 / 붙여넣기 / 삭제
